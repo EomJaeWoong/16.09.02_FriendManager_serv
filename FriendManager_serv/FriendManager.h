@@ -62,6 +62,7 @@ BOOL InitServer();
 BOOL OnServer();
 void Network();
 
+void InitData();
 void ConnectionCheck();
 
 void AcceptClient();

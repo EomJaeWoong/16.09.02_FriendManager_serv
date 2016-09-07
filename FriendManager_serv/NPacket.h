@@ -236,7 +236,7 @@ public:
 	int Put(unsigned __int64 i64Value);	// C# - ulong	// unsigned 8Byte
 
 	//int	Put(Proud::String &String);		// 문자열 넣기
-	int	Put(WCHAR *szString);
+	int	Put(WCHAR *szString, int iSize);
 
 	int Put(char *Lump, int iSize);
 	//////////////////////////////////////////////////////////////////////////

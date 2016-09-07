@@ -44,6 +44,8 @@ void main()
 	if (!InitServer())		return;
 	if (!OnServer())		return;
 
+	InitData();
+
 	wprintf(L"Server On.....\n");
 	while (1)
 	{
@@ -85,7 +87,7 @@ BOOL InitServer()
 	//-----------------------------------------------------------------------------------
 	SOCKADDR_IN sockaddr;
 	sockaddr.sin_family = AF_INET;
-	sockaddr.sin_port = dfNETWORK_PORT;
+	sockaddr.sin_port = htons(dfNETWORK_PORT);
 	InetPton(AF_INET, L"127.0.0.1", &sockaddr.sin_addr);
 	retval = bind(listen_sock, (SOCKADDR*)&sockaddr, sizeof(sockaddr));
 	if (retval == SOCKET_ERROR)
@@ -143,10 +145,12 @@ void Network()
 	//-----------------------------------------------------------------------------------
 	for (aIter = g_mAccount.begin(); aIter != g_mAccount.end(); ++aIter)
 	{
-		if (aIter->second->SendQ.GetUseSize() > 0)
-			FD_SET(aIter->second->sock, &WriteSet);
+		if (aIter->second->sock != INVALID_SOCKET){
+			if (aIter->second->SendQ.GetUseSize() > 0)
+				FD_SET(aIter->second->sock, &WriteSet);
 
-		FD_SET(aIter->second->sock, &ReadSet);
+			FD_SET(aIter->second->sock, &ReadSet);
+		}
 	}
 
 	TIMEVAL Time;
@@ -164,7 +168,7 @@ void Network()
 	{
 		DWORD dwError = GetLastError();
 		wprintf(L"Select() Error : %d\n", dwError);
-		return;
+		exit(1);
 	}
 
 	else
@@ -790,7 +794,7 @@ void makePacket_ResLogin(st_PACKET_HEADER *header, CNPacket *cPacket,
 {
 	*cPacket << uiAccountNo;
 
-	if (uiAccountNo != 0)	*cPacket << pID;
+	if (uiAccountNo != 0)	cPacket->Put(pID, dfNICK_MAX_LEN * 2);
 
 	header->byCode = dfPACKET_CODE;
 	header->wMsgType = df_RES_LOGIN;
@@ -803,13 +807,20 @@ void makePacket_ResLogin(st_PACKET_HEADER *header, CNPacket *cPacket,
 void makePacket_ResAccountList(st_PACKET_HEADER *header, CNPacket *cPacket)
 {
 	AccountIter aIter;
-
-	*cPacket << g_mAccount.size();
+	int size = g_mAccount.size();
 
 	for (aIter = g_mAccount.begin(); aIter != g_mAccount.end(); ++aIter)
 	{
+		if (0 == wcscmp(aIter->second->ID, L""))
+			size--;
+	}
+
+	*cPacket << (UINT)size;
+	
+	for (aIter = g_mAccount.begin(); aIter != g_mAccount.end(); ++aIter)
+	{
 		*cPacket << aIter->second->uiAccountNo;
-		*cPacket << aIter->second->ID;
+		cPacket->Put(aIter->second->ID, dfNICK_MAX_LEN * 2);
 	}
 
 	header->byCode = dfPACKET_CODE;
@@ -1032,14 +1043,50 @@ void AddFriend(UINT64 uiFrom, UINT64 uiTo)
 	g_mFriend.insert(pair<UINT64, stFRIEND *>(uiFriendNo, pFriendB));
 }
 
+/*-------------------------------------------------------------------------------------*/
+// 데이터 초기화
+/*-------------------------------------------------------------------------------------*/
+void InitData()
+{
+	WCHAR wName[dfNICK_MAX_LEN];
+	WCHAR wNumber[2];
 
+	for (int iCnt = 0; iCnt < 10; iCnt++)
+	{
+		stAccount * pAccount = new stAccount;
+		pAccount->uiAccountNo = ++uiAccountNo;
+		pAccount->sock = INVALID_SOCKET;
+		memset(pAccount->ID, 0, dfNICK_MAX_LEN * 2);
+		
+		memset(wName, 0, dfNICK_MAX_LEN * 2);
+		wcscat_s(wName, L"테스트계정");
+		wsprintf(wNumber, L"%d", uiAccountNo);
+		wcscat_s(wName, wNumber);
+		wcscpy_s(pAccount->ID, sizeof(wName), wName);
+
+		g_mAccount.insert(pair<UINT64, stAccount *>(uiAccountNo, pAccount));
+	}
+}
+
+/*-------------------------------------------------------------------------------------*/
+// 접속자 수 체크
+/*-------------------------------------------------------------------------------------*/
 void ConnectionCheck()
 {
+	AccountIter iter;
+	int size = g_mAccount.size();
+
+	for (iter = g_mAccount.begin(); iter != g_mAccount.end(); ++iter)
+	{
+		if (iter->second->sock == INVALID_SOCKET || (0 == wcscmp(iter->second->ID, L"")))
+			size--;
+	}
+
 	endTime = GetTickCount();
 
 	if ((endTime - startTime) / 1000 > 0)
 	{
-		wprintf(L"Connection : %d\n", g_mAccount.size());
+		wprintf(L"Connection : %d\n", size);
 		startTime = GetTickCount();
 	}
 }

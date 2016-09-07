@@ -129,7 +129,7 @@ void CNPacket::operator << (unsigned int iValue){	Put(iValue);}
 void CNPacket::operator << (float fValue){	Put(fValue);}
 void CNPacket::operator << (__int64 i64Value){	Put(i64Value);}
 void CNPacket::operator << (unsigned __int64 i64Value){	Put(i64Value);}
-void CNPacket::operator << (WCHAR *szString){	Put(szString);}
+void CNPacket::operator << (WCHAR *szString){	Put(szString, wcslen(szString));}
 
 void CNPacket::operator >> (char &chValue){ Get(chValue); }
 void CNPacket::operator >> (unsigned char &byValue){ Get(byValue); }
@@ -202,9 +202,9 @@ int	CNPacket::Put(Proud::String &String)		// 문자열 넣기
 }
 */
 
-int	CNPacket::Put(WCHAR *szString)
+int	CNPacket::Put(WCHAR *szString, int iSize)
 {
-	return PutData((BYTE*)szString, wcslen(szString) * 2);
+	return PutData((BYTE*)szString, iSize * 2);
 }
 
 int CNPacket::Put(char *Lump, int iSize)
