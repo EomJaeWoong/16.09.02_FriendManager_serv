@@ -192,22 +192,25 @@ void Network()
 void AcceptClient()
 {
 	int addrlen = sizeof(SOCKADDR_IN);
-	stAccount *pAccount = new stAccount;
+	WCHAR wcAddr[16];
 	
-	pAccount->uiAccountNo = ++uiAccountNo;
+	stAccount *pAccount = new stAccount;
+	pAccount->uiAccountNo = 0;
 	memset(pAccount->ID, 0, dfNICK_MAX_LEN * 2);
 
 	pAccount->sock = accept(listen_sock, (SOCKADDR *)&pAccount->sockaddr, &addrlen);
 	if (pAccount->sock == INVALID_SOCKET)
 	{
 		wprintf(L"Accept() Error\n");
-		delete pAccount;
-
 		return;
 	}
-
-	else
-		g_mAccount.insert(pair<UINT64, stAccount *>(pAccount->uiAccountNo, pAccount));
+	
+	g_mAccount.insert(pair<UINT64, stAccount *>(pAccount->uiAccountNo, pAccount));
+	
+	InetNtop(AF_INET, &pAccount->sockaddr.sin_addr, wcAddr, sizeof(wcAddr));
+	
+	wprintf(L"Accept - %s:%d Socket : %d \n", wcAddr, ntohs(pAccount->sockaddr.sin_port), 
+		pAccount->sock);
 }
 
 /*-------------------------------------------------------------------------------------*/
@@ -280,7 +283,12 @@ void ReadProc(UINT64 uiAccountNo)
 		else if (retval < 0)
 		{
 			DWORD dwError = GetLastError();
-			wprintf(L"Recv() Error [AccountNo : %d] : %d", pAccount->uiAccountNo, dwError);
+			if (dwError == WSAECONNRESET)
+			{
+				DisconnectClient(uiAccountNo);
+			}
+			wprintf(L"Recv() Error [AccountNo : %d] : %d\n", 
+				pAccount->uiAccountNo, dwError);
 			return;
 		}
 
@@ -377,6 +385,10 @@ BOOL PacketProc(UINT64 uiAccountNo)
 
 	case df_REQ_FRIEND_AGREE:
 		return packetProc_ReqFriendAgree(pAccount, &cPacket);
+		break;
+
+	case df_REQ_STRESS_ECHO:
+		return packetProc_ReqStressEcho(pAccount, &cPacket);
 		break;
 
 	default:
@@ -820,7 +832,7 @@ void makePacket_ResAccountList(st_PACKET_HEADER *header, CNPacket *cPacket)
 	for (aIter = g_mAccount.begin(); aIter != g_mAccount.end(); ++aIter)
 	{
 		*cPacket << aIter->second->uiAccountNo;
-		cPacket->Put(aIter->second->ID, dfNICK_MAX_LEN * 2);
+		cPacket->Put(aIter->second->ID, dfNICK_MAX_LEN);
 	}
 
 	header->byCode = dfPACKET_CODE;
@@ -974,6 +986,57 @@ void makePacket_ResFriendAgree(st_PACKET_HEADER *header, CNPacket *cPacket,
 }
 /*-------------------------------------------------------------------------------------*/
 
+
+/*-------------------------------------------------------------------------------------*/
+// Stress test용 Packet처리
+
+//---------------------------------------------------------------------------------------
+// Client -> Server
+//---------------------------------------------------------------------------------------
+BOOL packetProc_ReqStressEcho(stAccount *pAccount, CNPacket *cPacket)
+{
+	short wSize;
+	WCHAR *wText;
+
+	*cPacket >> wSize;
+
+	wText = new WCHAR[wSize];
+	cPacket->Get(wText, wSize);
+
+	return sendProc_ResStressEcho(pAccount, wSize, wText);
+}
+
+//---------------------------------------------------------------------------------------
+// Server -> Client
+//---------------------------------------------------------------------------------------
+BOOL sendProc_ResStressEcho(stAccount *pAccount, WORD wSize, WCHAR *wText)
+{
+	st_PACKET_HEADER header;
+	CNPacket cPacket;
+
+	makePacket_ResStressEcho(&header, &cPacket, wSize, wText);
+
+	SendUnicast(pAccount, &header, &cPacket);
+
+	return TRUE;
+}
+
+//---------------------------------------------------------------------------------------
+// Stress Test용 Packet 제작
+//---------------------------------------------------------------------------------------
+void makePacket_ResStressEcho(st_PACKET_HEADER *header, CNPacket *cPacket, 
+	WORD wSize, WCHAR *wText)
+{
+	*cPacket << wSize;
+	*cPacket << wText;
+
+	header->byCode = dfPACKET_CODE;
+	header->wMsgType = df_RES_STRESS_ECHO;
+	header->wPayloadSize = cPacket->GetDataSize();
+}
+/*-------------------------------------------------------------------------------------*/
+
+
 /*-------------------------------------------------------------------------------------*/
 // 1 : 1 Send
 /*-------------------------------------------------------------------------------------*/
@@ -994,6 +1057,36 @@ void SendBroadcast(st_PACKET_HEADER *header, CNPacket *cPacket)
 	{
 		SendUnicast(iter->second, header, cPacket);
 	}
+}
+
+/*-------------------------------------------------------------------------------------*/
+// 연결 끊기
+/*-------------------------------------------------------------------------------------*/
+void DisconnectClient(UINT64 uiAccountNo)
+{
+	AccountIter aIter;
+	SockIter sIter;
+
+	if (uiAccountNo == df_NO_LOGIN)
+	{
+		for (sIter = g_mConnectSock.begin(); sIter != g_mConnectSock.end(); ++sIter)
+		{
+			if ()
+		}
+	}
+	aIter = g_mAccount.find(uiAccountNo);
+
+	if (aIter != g_mAccount.end())
+	{
+		aIter->second->sock = INVALID_SOCKET;
+		aIter->second->RecvQ.ClearBuffer();
+		aIter->second->SendQ.ClearBuffer();
+		//memset(&aIter->second->sockaddr, 0, sizeof(SOCKADDR_IN));
+	}
+
+
+	wprintf(L"Disconnect - %s:%d [UserNo:%d][Socket:%d]\n", aIter->second->ID,
+		aIter->second->sockaddr.sin_port, uiAccountNo);
 }
 
 /*-------------------------------------------------------------------------------------*/
@@ -1073,20 +1166,11 @@ void InitData()
 /*-------------------------------------------------------------------------------------*/
 void ConnectionCheck()
 {
-	AccountIter iter;
-	int size = g_mAccount.size();
-
-	for (iter = g_mAccount.begin(); iter != g_mAccount.end(); ++iter)
-	{
-		if (iter->second->sock == INVALID_SOCKET || (0 == wcscmp(iter->second->ID, L"")))
-			size--;
-	}
-
 	endTime = GetTickCount();
 
 	if ((endTime - startTime) / 1000 > 0)
 	{
-		wprintf(L"Connection : %d\n", size);
+		wprintf(L"Connection : %d\n", g_mConnectSock.size());
 		startTime = GetTickCount();
 	}
 }

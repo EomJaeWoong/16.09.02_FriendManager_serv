@@ -3,6 +3,8 @@
 
 using namespace std;
 
+#define df_NO_LOGIN 0
+
 /*-------------------------------------------------------------------------------------*/
 // 회원 정보
 /*-------------------------------------------------------------------------------------*/
@@ -19,7 +21,7 @@ struct stAccount
 	SOCKADDR_IN sockaddr;
 };
 
-#define Account map<UINT64, stAccount *>
+#define Account multimap<UINT64, stAccount *>
 #define AccountIter Account::iterator
 
 /*-------------------------------------------------------------------------------------*/
@@ -66,6 +68,8 @@ void InitData();
 void ConnectionCheck();
 
 void AcceptClient();
+void DisconnectClient(UINT64 uiAccountNo);
+
 void SocketProc(FD_SET ReadSet, FD_SET WriteSet);
 void WriteProc(UINT64 uiAccountNo);
 void ReadProc(UINT64 uiAccountNo);
@@ -121,10 +125,19 @@ void makePacket_ResFriendAgree(st_PACKET_HEADER *header, CNPacket *cPacket, UINT
 /*-------------------------------------------------------------------------------------*/
 
 /*-------------------------------------------------------------------------------------*/
+// Stress test용 Packet처리
+/*-------------------------------------------------------------------------------------*/
+BOOL packetProc_ReqStressEcho(stAccount *pAccount, CNPacket *cPacket);
+BOOL sendProc_ResStressEcho(stAccount *pAccount, WORD wSize, WCHAR *wText);
+void makePacket_ResStressEcho(st_PACKET_HEADER *header, CNPacket *cPacket,
+	WORD wSize, WCHAR *wText);
+
+/*-------------------------------------------------------------------------------------*/
 // Packet 전송 함수
 /*-------------------------------------------------------------------------------------*/
 void SendUnicast(stAccount *pClient, st_PACKET_HEADER *header, CNPacket *cPacket);
 void SendBroadcast(st_PACKET_HEADER *header, CNPacket *cPacket);
+void makePacket_ResStressEcho(WORD wSize, WCHAR *wText);
 
 /*-------------------------------------------------------------------------------------*/
 // 회원 찾기
