@@ -21,7 +21,7 @@ struct stAccount
 	SOCKADDR_IN sockaddr;
 };
 
-#define Account multimap<UINT64, stAccount *>
+#define Account list<stAccount *>
 #define AccountIter Account::iterator
 
 /*-------------------------------------------------------------------------------------*/
@@ -29,8 +29,6 @@ struct stAccount
 /*-------------------------------------------------------------------------------------*/
 struct stFRIEND
 {
-	UINT64 uiNo;
-
 	UINT64 uiFromNo;
 	UINT64 uiToNo;
 
@@ -96,7 +94,7 @@ BOOL packetProc_ReqFriendAgree(stAccount *pAccount, CNPacket *cPacket);
 // Server -> Client로 Packet 만들어 보냄
 /*-------------------------------------------------------------------------------------*/
 BOOL sendProc_ResAccountAdd(stAccount *pAccount, UINT64 uiAccountNo);
-BOOL sendProc_ResLogin(stAccount *pAccount, UINT64 uiAccountNo);
+BOOL sendProc_ResLogin(stAccount *pAccount, UINT64 uiAccountNo, WCHAR* pID);
 BOOL sendProc_ResAccountList(stAccount *pAccount);
 BOOL sendProc_ResFriendList(stAccount *pAccount);
 BOOL sendProc_ResFriendReqList(stAccount *pAccount);
@@ -145,8 +143,15 @@ void makePacket_ResStressEcho(WORD wSize, WCHAR *wText);
 stAccount *findAccount(UINT64 uiAccountNo);
 
 /*-------------------------------------------------------------------------------------*/
-// 친구요청 목록에 추가
+// 친구 목록에 추가, 삭제
+/*-------------------------------------------------------------------------------------*/
+void AddFriend(UINT64 uiFrom, UINT64 uiTo);
+void DeleteFriend(UINT64 uiFrom, UINT64 uiTo);
+
+/*-------------------------------------------------------------------------------------*/
+// 친구요청 목록에 추가, 삭제
 /*-------------------------------------------------------------------------------------*/
 void AddFriendReq(UINT64 uiFrom, UINT64 uiTo);
+void DeleteFriendReq(UINT64 uiFrom, UINT64 uiTo);
 
 #endif

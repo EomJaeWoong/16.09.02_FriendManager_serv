@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <list>
 #include <map>
 
 #pragma comment(lib, "Ws2_32.lib")
@@ -23,13 +24,12 @@ SOCKET				listen_sock;
 // 회원번호 증가를 위한 NO
 //-----------------------------------------------------------------------------------
 UINT64				uiAccountNo;
-UINT64				uiFriendNo;
 UINT64				uiReqNo;
 
 //-----------------------------------------------------------------------------------
 // 회원 관리 변수
 //-----------------------------------------------------------------------------------
-Account				g_mAccount;
+Account				g_lAccount;
 Friend				g_mFriend;
 FriendReq			g_mFriendReq;
 FriendReq_From		g_mFriendReqFrom;
@@ -101,7 +101,6 @@ BOOL InitServer()
 	//-----------------------------------------------------------------------------------
 	uiAccountNo = 0;
 	uiReqNo		= 0;
-	uiFriendNo  = 0;
 
 	return TRUE;
 }
@@ -143,13 +142,13 @@ void Network()
 	//-----------------------------------------------------------------------------------
 	// Account Socket을 ReadSet, WriteSet에 등록
 	//-----------------------------------------------------------------------------------
-	for (aIter = g_mAccount.begin(); aIter != g_mAccount.end(); ++aIter)
+	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
 	{
-		if (aIter->second->sock != INVALID_SOCKET){
-			if (aIter->second->SendQ.GetUseSize() > 0)
-				FD_SET(aIter->second->sock, &WriteSet);
+		if ((*aIter)->sock != INVALID_SOCKET){
+			if ((*aIter)->SendQ.GetUseSize() > 0)
+				FD_SET((*aIter)->sock, &WriteSet);
 
-			FD_SET(aIter->second->sock, &ReadSet);
+			FD_SET((*aIter)->sock, &ReadSet);
 		}
 	}
 
@@ -205,7 +204,7 @@ void AcceptClient()
 		return;
 	}
 	
-	g_mAccount.insert(pair<UINT64, stAccount *>(pAccount->uiAccountNo, pAccount));
+	g_lAccount.push_front(pAccount);
 	
 	InetNtop(AF_INET, &pAccount->sockaddr.sin_addr, wcAddr, sizeof(wcAddr));
 	
@@ -219,15 +218,15 @@ void AcceptClient()
 /*-------------------------------------------------------------------------------------*/
 void SocketProc(FD_SET ReadSet, FD_SET WriteSet)
 {
-	AccountIter iter;
+	AccountIter aIter;
 
-	for (iter = g_mAccount.begin(); iter != g_mAccount.end(); ++iter)
+	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
 	{
-		if (FD_ISSET(iter->second->sock, &WriteSet))
-			WriteProc(iter->first);
+		if (FD_ISSET((*aIter)->sock, &WriteSet))
+			WriteProc((*aIter)->uiAccountNo);
 
-		if (FD_ISSET(iter->second->sock, &ReadSet))
-			ReadProc(iter->first);
+		if (FD_ISSET((*aIter)->sock, &ReadSet))
+			ReadProc((*aIter)->uiAccountNo);
 	}
 }
 
@@ -251,10 +250,9 @@ void WriteProc(UINT64 uiAccountNo)
 		if (retval == 0)
 			break;
 
-		else if (retval < 0){
-			DWORD dwError = GetLastError();
-			wprintf(L"Send() Error [AccountNo : %d] : %d", pAccount->uiAccountNo, dwError);
-			//TODO : Disconnect Client
+		else if (retval < 0)
+		{
+			DisconnectClient(uiAccountNo);
 			return;
 		}
 	}
@@ -282,13 +280,7 @@ void ReadProc(UINT64 uiAccountNo)
 
 		else if (retval < 0)
 		{
-			DWORD dwError = GetLastError();
-			if (dwError == WSAECONNRESET)
-			{
-				DisconnectClient(uiAccountNo);
-			}
-			wprintf(L"Recv() Error [AccountNo : %d] : %d\n", 
-				pAccount->uiAccountNo, dwError);
+			DisconnectClient(uiAccountNo);
 			return;
 		}
 
@@ -408,18 +400,26 @@ BOOL PacketProc(UINT64 uiAccountNo)
 BOOL packetProc_ReqAccountAdd(stAccount *pAccount, CNPacket *cPacket)
 {
 	AccountIter aIter;
+	stAccount *stTargetAccount;
+	WCHAR wID[dfNICK_MAX_LEN];
 
-	cPacket->Get(pAccount->ID, dfNICK_MAX_LEN * 2);
-	for (aIter = g_mAccount.begin(); aIter != g_mAccount.end(); ++aIter)
+	cPacket->Get(wID, dfNICK_MAX_LEN * 2);
+	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
 	{
 		//중복 닉네임
-		if ((aIter->second != pAccount) && 
-			(0 != wcscmp(aIter->second->ID, pAccount->ID)))
+		if (0 == wcscmp((*aIter)->ID, wID))
 			return FALSE;
 			//TODO : 거부 후 삭제
 	}
 
-	return sendProc_ResAccountAdd(pAccount, pAccount->uiAccountNo);
+	stTargetAccount = new stAccount;
+	stTargetAccount->uiAccountNo = ++uiAccountNo;
+	stTargetAccount->sock = INVALID_SOCKET;
+	memcpy(stTargetAccount->ID, wID, dfNICK_MAX_LEN * 2);
+
+	g_lAccount.push_front(stTargetAccount);
+
+	return sendProc_ResAccountAdd(pAccount, stTargetAccount->uiAccountNo);
 }
 
 //---------------------------------------------------------------------------------------
@@ -432,14 +432,24 @@ BOOL packetProc_ReqLogin(stAccount *pAccount, CNPacket *cPacket)
 
 	*cPacket >> uiAccountNo;
 
-	aIter = g_mAccount.find(uiAccountNo);
+	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
+	{
+		if ((*aIter)->uiAccountNo == uiAccountNo)	break;
+	}
 
 	//-----------------------------------------------------------------------------------
 	// 회원이 없으면 0
 	//-----------------------------------------------------------------------------------
-	if (aIter == g_mAccount.end())	uiAccountNo = 0;
-	
-	return sendProc_ResLogin(pAccount, uiAccountNo);
+	if (aIter == g_lAccount.end())	uiAccountNo = 0;
+	else
+	{
+		pAccount->uiAccountNo = uiAccountNo;
+		wcscpy_s(pAccount->ID, (*aIter)->ID);
+
+		g_lAccount.erase(aIter);
+	}
+
+	return sendProc_ResLogin(pAccount, uiAccountNo, pAccount->ID);
 }
 
 //---------------------------------------------------------------------------------------
@@ -479,27 +489,41 @@ BOOL packetProc_ReqFriendReplyList(stAccount *pAccount, CNPacket *cPacket)
 //---------------------------------------------------------------------------------------
 BOOL packetProc_ReqFriendRemove(stAccount *pAccount, CNPacket *cPacket)
 {
-	FriendIter fIterA, fIterB;
-	AccountIter aIter;
-
+	pair<FriendIter, FriendIter> range;
+	FriendIter fIterFrom, fIterTo;
+	BOOL bFrom = FALSE, bTo = FALSE;
+	stAccount *stTargetAccount;
 	UINT64 uiFriendAccountNo;
 	BYTE byResult = df_RESULT_FRIEND_REMOVE_OK;
 
 	*cPacket >> uiFriendAccountNo;
 
-	fIterA = g_mFriend.find(pAccount->uiAccountNo);
-	fIterB = g_mFriend.find(uiFriendAccountNo);
-	aIter = g_mAccount.find(uiFriendAccountNo);
+	stTargetAccount = findAccount(uiFriendAccountNo);
+
+	range = g_mFriend.equal_range(pAccount->uiAccountNo);
+	for (fIterFrom = range.first; fIterFrom != range.second; ++fIterFrom)
+	{
+		if (fIterFrom->second->uiToNo == uiFriendAccountNo)
+			break;
+	}
+
+	range = g_mFriend.equal_range(uiFriendAccountNo);
+	for (fIterTo = range.first; fIterTo != range.second; ++fIterTo)
+	{
+		if (fIterTo->second->uiToNo == pAccount->uiAccountNo)
+			break;
+	}
 
 	//친구관계가 없을 때나 회원이 없을 때
-	if ((fIterA == g_mFriend.end()) || (fIterB == g_mFriend.end()) ||
-		(aIter == g_mAccount.end()))
+	if (NULL == stTargetAccount)
 		byResult = df_RESULT_FRIEND_REMOVE_FAIL;
 
 	//친구가 아닐 때
-	if ((fIterA->second->uiFromNo != fIterB->second->uiToNo) ||
-		(fIterA->second->uiToNo != fIterB->second->uiFromNo))
+	if (fIterFrom == g_mFriend.end() || fIterTo == g_mFriend.end())
 		byResult = df_RESULT_FRIEND_REMOVE_NOTFRIEND;
+
+	if (byResult = df_RESULT_FRIEND_REMOVE_OK)
+		DeleteFriend(pAccount->uiAccountNo, uiFriendAccountNo);
 
 	return sendProc_ResFriendRemove(pAccount, uiFriendAccountNo, byResult);
 }
@@ -509,18 +533,31 @@ BOOL packetProc_ReqFriendRemove(stAccount *pAccount, CNPacket *cPacket)
 //---------------------------------------------------------------------------------------
 BOOL packetProc_ReqFriendReq(stAccount *pAccount, CNPacket *cPacket)
 {
-	AccountIter aIter;
-
+	pair<FriendReqFromIter, FriendReqFromIter> range;
+	FriendReqFromIter rfIter;
+	FriendReqIter rIter;
+	stAccount *stTargetAccount;
 	UINT64 uiFriendAccountNo;
 	BYTE byResult = df_RESULT_FRIEND_REQUEST_OK;
 
 	*cPacket >> uiFriendAccountNo;
 
-	aIter = g_mAccount.find(uiFriendAccountNo);
+	range = g_mFriendReqFrom.equal_range(uiFriendAccountNo);
+	stTargetAccount = findAccount(uiFriendAccountNo);
 
-	if (aIter == g_mAccount.end())
+	//찾을 수 없을 때
+	if (NULL == stTargetAccount)
 		byResult = df_RESULT_FRIEND_REQUEST_NOTFOUND;
 	//이미 요청 되어있을 때
+	for (rfIter = range.first; rfIter != range.second; ++rfIter)
+	{
+		rIter = g_mFriendReq.find(rfIter->second);
+		if ((rIter != g_mFriendReq.end()) && 
+			(rIter->second->uiToNo == stTargetAccount->uiAccountNo))
+		{
+			byResult = df_RESULT_FRIEND_REQUEST_AREADY;
+		}
+	}
 
 	if (byResult == df_RESULT_FRIEND_REQUEST_OK)
 		AddFriendReq(pAccount->uiAccountNo, uiFriendAccountNo);
@@ -533,24 +570,33 @@ BOOL packetProc_ReqFriendReq(stAccount *pAccount, CNPacket *cPacket)
 //---------------------------------------------------------------------------------------
 BOOL packetProc_ReqFriendCancel(stAccount *pAccount, CNPacket *cPacket)
 {
-	FriendReqFromIter ffIter;
-	FriendReqIter frIter;
-	AccountIter aIter;
-
+	pair<FriendReqToIter, FriendReqToIter> range;
+	FriendReqToIter rtIter;
+	FriendReqIter rIter;
+	stAccount *stTargetAccount;
 	UINT64 uiFriendAccountNo;
 	BYTE byResult = df_RESULT_FRIEND_CANCEL_OK;
 
 	*cPacket >> uiFriendAccountNo;
 
-	aIter = g_mAccount.find(uiFriendAccountNo);
-	ffIter = g_mFriendReqFrom.find(pAccount->uiAccountNo);
-	frIter = g_mFriendReq.find(ffIter->second);
+	range = g_mFriendReqTo.equal_range(uiFriendAccountNo);
+	stTargetAccount = findAccount(uiFriendAccountNo);
 
-	if (aIter == g_mAccount.end())
+	//찾을 수 없을 때
+	if (NULL == stTargetAccount)
 		byResult = df_RESULT_FRIEND_CANCEL_FAIL;
 
-	if (frIter->second->uiToNo != uiFriendAccountNo)
-		byResult = df_RESULT_FRIEND_CANCEL_NOTFRIEND;
+	//요청이 다를때
+	for (rtIter = range.first; rtIter != range.second; ++rtIter)
+	{
+		rIter = g_mFriendReq.find(rtIter->second);
+		if ((rIter == g_mFriendReq.end()) || 
+			rIter->second->uiToNo != uiFriendAccountNo)
+			byResult = df_RESULT_FRIEND_CANCEL_NOTFRIEND;
+	}
+
+	if (byResult == df_RESULT_FRIEND_CANCEL_OK)
+		DeleteFriendReq(pAccount->uiAccountNo, uiFriendAccountNo);
 
 	return sendProc_ResFriendCancel(pAccount, uiFriendAccountNo, byResult);
 }
@@ -560,24 +606,33 @@ BOOL packetProc_ReqFriendCancel(stAccount *pAccount, CNPacket *cPacket)
 //---------------------------------------------------------------------------------------
 BOOL packetProc_ReqFriendDeny(stAccount *pAccount, CNPacket *cPacket)
 {
-	FriendReqToIter ftIter;
-	FriendReqIter frIter;
-	AccountIter aIter;
-
+	pair<FriendReqFromIter, FriendReqFromIter> range;
+	FriendReqFromIter rfIter;
+	FriendReqIter rIter;
+	stAccount *stTargetAccount;
 	UINT64 uiFriendAccountNo;
 	BYTE byResult = df_RESULT_FRIEND_DENY_OK;
 
 	*cPacket >> uiFriendAccountNo;
 
-	aIter = g_mAccount.find(uiFriendAccountNo);
-	ftIter = g_mFriendReqTo.find(pAccount->uiAccountNo);
-	frIter = g_mFriendReq.find(ftIter->second);
+	range = g_mFriendReqFrom.equal_range(uiFriendAccountNo);
+	stTargetAccount = findAccount(uiFriendAccountNo);
 
-	if (aIter == g_mAccount.end())
-		byResult = df_RESULT_FRIEND_CANCEL_FAIL;
+	//찾을 수 없을 때
+	if (NULL == stTargetAccount)
+		byResult = df_RESULT_FRIEND_DENY_FAIL;
 
-	if (frIter->second->uiFromNo != uiFriendAccountNo)
-		byResult = df_RESULT_FRIEND_CANCEL_NOTFRIEND;
+	//요청이 다를때
+	for (rfIter = range.first; rfIter != range.second; ++rfIter)
+	{
+		rIter = g_mFriendReq.find(rfIter->second);
+		if ((rIter == g_mFriendReq.end()) ||
+			rIter->second->uiFromNo != uiFriendAccountNo)
+			byResult = df_RESULT_FRIEND_DENY_NOTFRIEND;
+	}
+
+	if (byResult == df_RESULT_FRIEND_CANCEL_OK)
+		DeleteFriendReq(uiFriendAccountNo, pAccount->uiAccountNo);
 
 	return sendProc_ResFriendDeny(pAccount, uiFriendAccountNo, byResult);
 }
@@ -590,21 +645,25 @@ BOOL packetProc_ReqFriendAgree(stAccount *pAccount, CNPacket *cPacket)
 	FriendReqToIter ftIter;
 	FriendReqIter frIter;
 	AccountIter aIter;
-
 	UINT64 uiFriendAccountNo;
 	BYTE byResult = df_RESULT_FRIEND_AGREE_OK;
+	stAccount *stTargetAccount;
 
 	*cPacket >> uiFriendAccountNo;
 
-	aIter = g_mAccount.find(uiFriendAccountNo);
+	stTargetAccount = findAccount(uiFriendAccountNo);
+
 	ftIter = g_mFriendReqTo.find(pAccount->uiAccountNo);
 	frIter = g_mFriendReq.find(ftIter->second);
 
-	if (aIter == g_mAccount.end())
+	if (aIter == g_lAccount.end())
 		byResult = df_RESULT_FRIEND_AGREE_FAIL;
 
 	if (frIter->second->uiFromNo != uiFriendAccountNo)
 		byResult = df_RESULT_FRIEND_AGREE_NOTFRIEND;
+
+	if (byResult == df_RESULT_FRIEND_AGREE_OK)
+		AddFriend(uiFriendAccountNo, pAccount->uiAccountNo);
 
 	return sendProc_ResFriendAgree(pAccount, uiFriendAccountNo, byResult);
 }
@@ -631,12 +690,12 @@ BOOL sendProc_ResAccountAdd(stAccount *pAccount, UINT64 uiAccountNo)
 //---------------------------------------------------------------------------------------
 // 회원로그인 결과
 //---------------------------------------------------------------------------------------
-BOOL sendProc_ResLogin(stAccount *pAccount, UINT64 uiAccountNo)
+BOOL sendProc_ResLogin(stAccount *pAccount, UINT64 uiAccountNo, WCHAR* pID)
 {
 	st_PACKET_HEADER header;
 	CNPacket cPacket;
 
-	makePacket_ResLogin(&header, &cPacket, uiAccountNo, pAccount->ID);
+	makePacket_ResLogin(&header, &cPacket, uiAccountNo, pID);
 
 	SendUnicast(pAccount, &header, &cPacket);
 
@@ -806,7 +865,7 @@ void makePacket_ResLogin(st_PACKET_HEADER *header, CNPacket *cPacket,
 {
 	*cPacket << uiAccountNo;
 
-	if (uiAccountNo != 0)	cPacket->Put(pID, dfNICK_MAX_LEN * 2);
+	if (uiAccountNo != 0)	cPacket->Put(pID, dfNICK_MAX_LEN);
 
 	header->byCode = dfPACKET_CODE;
 	header->wMsgType = df_RES_LOGIN;
@@ -819,20 +878,29 @@ void makePacket_ResLogin(st_PACKET_HEADER *header, CNPacket *cPacket,
 void makePacket_ResAccountList(st_PACKET_HEADER *header, CNPacket *cPacket)
 {
 	AccountIter aIter;
-	int size = g_mAccount.size();
+	int size = g_lAccount.size();
 
-	for (aIter = g_mAccount.begin(); aIter != g_mAccount.end(); ++aIter)
+	//-----------------------------------------------------------------------------------
+	// 회원 수 계산
+	//-----------------------------------------------------------------------------------
+	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
 	{
-		if (0 == wcscmp(aIter->second->ID, L""))
+		if (0 == wcscmp((*aIter)->ID, L""))
 			size--;
 	}
 
 	*cPacket << (UINT)size;
 	
-	for (aIter = g_mAccount.begin(); aIter != g_mAccount.end(); ++aIter)
+	//-----------------------------------------------------------------------------------
+	// 회원 정보 삽입
+	//-----------------------------------------------------------------------------------
+	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
 	{
-		*cPacket << aIter->second->uiAccountNo;
-		cPacket->Put(aIter->second->ID, dfNICK_MAX_LEN);
+		if (0 != wcscmp((*aIter)->ID, L""))
+		{
+			*cPacket << (*aIter)->uiAccountNo;
+			cPacket->Put((*aIter)->ID, dfNICK_MAX_LEN);
+		}
 	}
 
 	header->byCode = dfPACKET_CODE;
@@ -846,19 +914,33 @@ void makePacket_ResAccountList(st_PACKET_HEADER *header, CNPacket *cPacket)
 void makePacket_ResFriendList(st_PACKET_HEADER *header, CNPacket *cPacket,
 	UINT64 uiAccountNo)
 {
-	FriendIter fIter;
-	AccountIter aIter;
-
-	*cPacket << (UINT)g_mFriend.count(uiAccountNo);
+	FriendIter fIter, fIterTo;
+	stAccount *stTargetAccount;
+	UINT iCount = 0;
 
 	for (fIter = g_mFriend.begin(); fIter != g_mFriend.end(); ++fIter)
 	{
-		if (fIter->first == uiAccountNo)
+		if (fIter->second->uiFromNo == uiAccountNo)
 		{
-			*cPacket << fIter->second->uiToNo;
+			fIterTo = g_mFriend.find(fIter->second->uiToNo);
+			if (fIterTo != g_mFriend.end() && fIterTo->second->uiToNo == uiAccountNo)
+				iCount++;
+		}
+	}
 
-			aIter = g_mAccount.find(fIter->second->uiToNo);
-			*cPacket << aIter->second->ID;
+	*cPacket << iCount;
+
+	for (fIter = g_mFriend.begin(); fIter != g_mFriend.end(); ++fIter)
+	{
+		if (fIter->second->uiFromNo == uiAccountNo)
+		{
+			fIterTo = g_mFriend.find(fIter->second->uiToNo);
+			if (fIterTo != g_mFriend.end() && fIterTo->second->uiToNo == uiAccountNo)
+			{
+				*cPacket << fIter->second->uiToNo;
+				stTargetAccount = findAccount(fIter->second->uiToNo);
+				cPacket->Put(stTargetAccount->ID, dfNICK_MAX_LEN);
+			}
 		}
 	}
 
@@ -873,17 +955,21 @@ void makePacket_ResFriendList(st_PACKET_HEADER *header, CNPacket *cPacket,
 void makePacket_ResFriendReqList(st_PACKET_HEADER *header, CNPacket *cPacket,
 	UINT64 uiAccountNo)
 {
+	pair<FriendReqFromIter, FriendReqFromIter> range;
 	FriendReqFromIter ffIter;
-	AccountIter aIter;
-	
+	FriendReqIter rIter;
+	stAccount *stTargetAccount;
+
 	*cPacket << (UINT)g_mFriendReqFrom.count(uiAccountNo);
+	range = g_mFriendReqFrom.equal_range(uiAccountNo);
 
-	for (ffIter = g_mFriendReqFrom.begin(); ffIter != g_mFriendReqFrom.end(); ffIter++)
+	for (ffIter = range.first; ffIter != range.second; ffIter++)
 	{
-		*cPacket << ffIter->second;
+		rIter = g_mFriendReq.find(ffIter->second);
+		*cPacket << rIter->second->uiToNo;
 
-		aIter = g_mAccount.find(ffIter->second);
-		*cPacket << aIter->second->ID;
+		stTargetAccount = findAccount(rIter->second->uiToNo);
+		cPacket->Put(stTargetAccount->ID, dfNICK_MAX_LEN);
 	}
 
 	header->byCode = dfPACKET_CODE;
@@ -897,17 +983,21 @@ void makePacket_ResFriendReqList(st_PACKET_HEADER *header, CNPacket *cPacket,
 void makePacket_ResFriendReplyList(st_PACKET_HEADER *header, CNPacket *cPacket, 
 	UINT64 uiAccountNo)
 {
+	pair<FriendReqToIter, FriendReqToIter> range;
 	FriendReqToIter ftIter;
-	AccountIter aIter;
+	FriendReqIter rIter;
+	stAccount *stTargetAccount;
 
 	*cPacket << (UINT)g_mFriendReqTo.count(uiAccountNo);
+	range = g_mFriendReqTo.equal_range(uiAccountNo);
 
-	for (ftIter = g_mFriendReqTo.begin(); ftIter != g_mFriendReqTo.end(); ftIter++)
+	for (ftIter = range.first; ftIter != range.second; ftIter++)
 	{
-		*cPacket << ftIter->second;
+		rIter = g_mFriendReq.find(ftIter->second);
+		*cPacket << rIter->second->uiFromNo;
 
-		aIter = g_mAccount.find(ftIter->second);
-		*cPacket << aIter->second->ID;
+		stTargetAccount = findAccount(rIter->second->uiFromNo);
+		cPacket->Put(stTargetAccount->ID, dfNICK_MAX_LEN);
 	}
 
 	header->byCode = dfPACKET_CODE;
@@ -1047,46 +1137,24 @@ void SendUnicast(stAccount *pClient, st_PACKET_HEADER *header, CNPacket *cPacket
 }
 
 /*-------------------------------------------------------------------------------------*/
-// 1 : n Send
-/*-------------------------------------------------------------------------------------*/
-void SendBroadcast(st_PACKET_HEADER *header, CNPacket *cPacket)
-{
-	AccountIter iter;
-
-	for (iter = g_mAccount.begin(); iter != g_mAccount.end(); ++iter)
-	{
-		SendUnicast(iter->second, header, cPacket);
-	}
-}
-
-/*-------------------------------------------------------------------------------------*/
 // 연결 끊기
 /*-------------------------------------------------------------------------------------*/
 void DisconnectClient(UINT64 uiAccountNo)
 {
-	AccountIter aIter;
-	SockIter sIter;
+	stAccount *stTargetAccount = findAccount(uiAccountNo);
+	WCHAR wcAddr[16];
 
-	if (uiAccountNo == df_NO_LOGIN)
-	{
-		for (sIter = g_mConnectSock.begin(); sIter != g_mConnectSock.end(); ++sIter)
-		{
-			if ()
-		}
-	}
-	aIter = g_mAccount.find(uiAccountNo);
+	InetNtop(AF_INET, &stTargetAccount->sockaddr.sin_addr, wcAddr, sizeof(wcAddr));
+	wprintf(L"Disconnect - %s:%d [UserNo:%d][Socket:%d]\n", wcAddr,
+		ntohs(stTargetAccount->sockaddr.sin_port), stTargetAccount->uiAccountNo,
+		stTargetAccount->sock);
 
-	if (aIter != g_mAccount.end())
-	{
-		aIter->second->sock = INVALID_SOCKET;
-		aIter->second->RecvQ.ClearBuffer();
-		aIter->second->SendQ.ClearBuffer();
-		//memset(&aIter->second->sockaddr, 0, sizeof(SOCKADDR_IN));
-	}
+	shutdown(stTargetAccount->sock, SD_BOTH);
 
-
-	wprintf(L"Disconnect - %s:%d [UserNo:%d][Socket:%d]\n", aIter->second->ID,
-		aIter->second->sockaddr.sin_port, uiAccountNo);
+	stTargetAccount->sock = INVALID_SOCKET;
+	stTargetAccount->RecvQ.ClearBuffer();
+	stTargetAccount->SendQ.ClearBuffer();
+	memset(&stTargetAccount->sockaddr, 0, sizeof(SOCKADDR_IN));
 }
 
 /*-------------------------------------------------------------------------------------*/
@@ -1094,9 +1162,15 @@ void DisconnectClient(UINT64 uiAccountNo)
 /*-------------------------------------------------------------------------------------*/
 stAccount *findAccount(UINT64 uiAccountNo)
 {
-	AccountIter aIter = g_mAccount.find(uiAccountNo);
+	AccountIter aIter;
 
-	return aIter->second;
+	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
+	{
+		if ((*aIter)->uiAccountNo == uiAccountNo)	break;
+	}
+
+	if (aIter == g_lAccount.end())	return NULL;
+	else							return (*aIter);
 }
 
 /*-------------------------------------------------------------------------------------*/
@@ -1110,10 +1184,47 @@ void AddFriendReq(UINT64 uiFrom, UINT64 uiTo)
 	pFriendReq->uiToNo	 = uiTo;
 	pFriendReq->Time = time(NULL);
 
-	g_mFriendReq.insert(pair<UINT64, stFRIEND_REQ *>(uiFrom, pFriendReq));
+	g_mFriendReq.insert(pair<UINT64, stFRIEND_REQ *>(uiReqNo, pFriendReq));
 
 	g_mFriendReqFrom.insert(pair<UINT64, UINT64>(uiFrom, uiReqNo));
 	g_mFriendReqTo.insert(pair<UINT64, UINT64>(uiTo, uiReqNo));
+}
+
+/*-------------------------------------------------------------------------------------*/
+// 친구요청 목록에서 삭제
+/*-------------------------------------------------------------------------------------*/
+void DeleteFriendReq(UINT64 uiFrom, UINT64 uiTo)
+{
+	FriendReqFromIter rfIter;
+	FriendReqToIter rtIter;
+	FriendReqIter rIter;
+
+	for (rIter = g_mFriendReq.begin(); rIter != g_mFriendReq.end(); ++rIter)
+	{
+		if (rIter->second->uiFromNo == uiFrom && rIter->second->uiToNo == uiTo)
+			break;
+	}
+
+	for (rfIter = g_mFriendReqFrom.begin(); rfIter != g_mFriendReqFrom.end(); ++rfIter)
+	{
+		if ((rfIter->first == uiFrom) && (rfIter->second == rIter->second->uiNo))
+		{
+			g_mFriendReqFrom.erase(rfIter);
+			break;
+		}
+	}
+
+	for (rtIter = g_mFriendReqTo.begin(); rtIter != g_mFriendReqTo.end(); ++rtIter)
+	{
+		if ((rtIter->first == uiTo) && (rtIter->second == rIter->second->uiNo))
+		{
+			g_mFriendReqTo.erase(rtIter);
+			break;
+		}
+	}
+
+	delete rIter->second;
+	g_mFriendReq.erase(rIter);
 }
 
 /*-------------------------------------------------------------------------------------*/
@@ -1124,16 +1235,43 @@ void AddFriend(UINT64 uiFrom, UINT64 uiTo)
 	stFRIEND *pFriendA = new stFRIEND;
 	stFRIEND *pFriendB = new stFRIEND;
 
-	pFriendA->uiNo = ++uiFriendNo;
 	pFriendA->uiFromNo = uiFrom;
 	pFriendA->uiToNo = uiTo;
+	
+	g_mFriend.insert(pair<UINT64, stFRIEND *>(uiFrom, pFriendA));
 
-	pFriendA->uiNo = uiFriendNo;
-	pFriendA->uiFromNo = uiTo;
-	pFriendA->uiToNo = uiFrom;
+	pFriendB->uiFromNo = uiTo;
+	pFriendB->uiToNo = uiFrom;
+	
+	g_mFriend.insert(pair<UINT64, stFRIEND *>(uiTo, pFriendB));
+}
 
-	g_mFriend.insert(pair<UINT64, stFRIEND *>(uiFriendNo, pFriendA));
-	g_mFriend.insert(pair<UINT64, stFRIEND *>(uiFriendNo, pFriendB));
+/*-------------------------------------------------------------------------------------*/
+// 친구 목록에서 삭제
+/*-------------------------------------------------------------------------------------*/
+void DeleteFriend(UINT64 uiFrom, UINT64 uiTo)
+{
+	FriendIter fIterFrom, fIterTo;
+
+	for (fIterFrom = g_mFriend.begin(); fIterFrom != g_mFriend.end(); ++fIterFrom)
+	{
+		if ((fIterFrom->second->uiFromNo == uiFrom) && (fIterFrom->second->uiToNo == uiTo))
+			break;
+	}
+
+	for (fIterTo = g_mFriend.begin(); fIterTo != g_mFriend.end(); ++fIterTo)
+	{
+		if ((fIterTo->second->uiFromNo == uiTo) && (fIterTo->second->uiToNo == uiFrom))
+			break;
+	}
+
+	if (fIterFrom != g_mFriend.end() && fIterTo != g_mFriend.end())
+	{
+		delete fIterFrom->second;
+		delete fIterTo->second;
+		g_mFriend.erase(fIterFrom);
+		g_mFriend.erase(fIterTo);
+	}
 }
 
 /*-------------------------------------------------------------------------------------*/
@@ -1157,7 +1295,7 @@ void InitData()
 		wcscat_s(wName, wNumber);
 		wcscpy_s(pAccount->ID, sizeof(wName), wName);
 
-		g_mAccount.insert(pair<UINT64, stAccount *>(uiAccountNo, pAccount));
+		g_lAccount.push_back(pAccount);
 	}
 }
 
@@ -1166,11 +1304,19 @@ void InitData()
 /*-------------------------------------------------------------------------------------*/
 void ConnectionCheck()
 {
+	AccountIter aIter;
 	endTime = GetTickCount();
+	int iSize = g_lAccount.size();
+
+	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
+	{
+		if ((*aIter)->sock == INVALID_SOCKET)
+			--iSize;
+	}
 
 	if ((endTime - startTime) / 1000 > 0)
 	{
-		wprintf(L"Connection : %d\n", g_mConnectSock.size());
+		wprintf(L"Connection : %d\n", iSize);
 		startTime = GetTickCount();
 	}
 }
