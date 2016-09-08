@@ -223,20 +223,20 @@ void SocketProc(FD_SET ReadSet, FD_SET WriteSet)
 	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
 	{
 		if (FD_ISSET((*aIter)->sock, &WriteSet))
-			WriteProc((*aIter)->uiAccountNo);
+			WriteProc((*aIter));
 
 		if (FD_ISSET((*aIter)->sock, &ReadSet))
-			ReadProc((*aIter)->uiAccountNo);
+			ReadProc((*aIter));
 	}
 }
 
 /*-------------------------------------------------------------------------------------*/
 // Write에 관한 처리(send)
 /*-------------------------------------------------------------------------------------*/
-void WriteProc(UINT64 uiAccountNo)
+void WriteProc(stAccount *pAccount)
 {
 	int retval;
-	stAccount *pAccount = findAccount(uiAccountNo);
+	//stAccount *pAccount = findAccount(uiAccountNo);
 
 	//-----------------------------------------------------------------------------------
 	// SendQ에 데이터가 있는한 계속 보냄
@@ -252,7 +252,7 @@ void WriteProc(UINT64 uiAccountNo)
 
 		else if (retval < 0)
 		{
-			DisconnectClient(uiAccountNo);
+			DisconnectClient(pAccount);
 			return;
 		}
 	}
@@ -261,26 +261,30 @@ void WriteProc(UINT64 uiAccountNo)
 /*-------------------------------------------------------------------------------------*/
 // Read에 관란 처리(Recv)
 /*-------------------------------------------------------------------------------------*/
-void ReadProc(UINT64 uiAccountNo)
+void ReadProc(stAccount *pAccount)
 {
 	int retval;
-	stAccount *pAccount = findAccount(uiAccountNo);
+	//stAccount *pAccount = findAccount(uiAccountNo);
 
 	retval = recv(pAccount->sock, pAccount->RecvQ.GetWriteBufferPtr(),
 		pAccount->RecvQ.GetNotBrokenPutSize(), 0);
 	pAccount->RecvQ.MoveWritePos(retval);
+
+	if (retval == 0)
+	{
+		DisconnectClient(pAccount);
+		return;
+	}
 
 	//-----------------------------------------------------------------------------------
 	// RecvQ에 데이터가 남아있는 한 계속 패킷 처리
 	//-----------------------------------------------------------------------------------
 	while (pAccount->RecvQ.GetUseSize() > 0)
 	{
-		if (retval == 0)
-			return;
-
-		else if (retval < 0)
+		if (retval < 0)
 		{
-			DisconnectClient(uiAccountNo);
+			//error
+			DisconnectClient(pAccount);
 			return;
 		}
 
@@ -1139,9 +1143,8 @@ void SendUnicast(stAccount *pClient, st_PACKET_HEADER *header, CNPacket *cPacket
 /*-------------------------------------------------------------------------------------*/
 // 연결 끊기
 /*-------------------------------------------------------------------------------------*/
-void DisconnectClient(UINT64 uiAccountNo)
+void DisconnectClient(stAccount *stTargetAccount)
 {
-	stAccount *stTargetAccount = findAccount(uiAccountNo);
 	WCHAR wcAddr[16];
 
 	InetNtop(AF_INET, &stTargetAccount->sockaddr.sin_addr, wcAddr, sizeof(wcAddr));
@@ -1155,6 +1158,20 @@ void DisconnectClient(UINT64 uiAccountNo)
 	stTargetAccount->RecvQ.ClearBuffer();
 	stTargetAccount->SendQ.ClearBuffer();
 	memset(&stTargetAccount->sockaddr, 0, sizeof(SOCKADDR_IN));
+
+	if (stTargetAccount == df_NO_LOGIN)
+	{
+		AccountIter aIter;
+
+		for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
+		{
+			if ((*aIter) == stTargetAccount)
+				break;
+		}
+
+		delete stTargetAccount;
+		g_lAccount.erase(aIter);
+	}
 }
 
 /*-------------------------------------------------------------------------------------*/

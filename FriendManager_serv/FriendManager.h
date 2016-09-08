@@ -66,11 +66,11 @@ void InitData();
 void ConnectionCheck();
 
 void AcceptClient();
-void DisconnectClient(UINT64 uiAccountNo);
+void DisconnectClient(stAccount *stTargetAccount);
 
 void SocketProc(FD_SET ReadSet, FD_SET WriteSet);
-void WriteProc(UINT64 uiAccountNo);
-void ReadProc(UINT64 uiAccountNo);
+void WriteProc(stAccount *pAccount);
+void ReadProc(stAccount *pAccount);
 
 BOOL PacketProc(UINT64 uiAccountNo);
 
