@@ -68,7 +68,7 @@ void ConnectionCheck();
 void AcceptClient();
 void DisconnectClient(stAccount *stTargetAccount);
 
-void SocketProc(FD_SET ReadSet, FD_SET WriteSet);
+void SocketProc(FD_SET *ReadSet, FD_SET *WriteSet);
 void WriteProc(stAccount *pAccount);
 void ReadProc(stAccount *pAccount);
 

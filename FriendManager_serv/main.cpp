@@ -132,13 +132,50 @@ void Network()
 {
 	int retval;
 	AccountIter aIter;
-	FD_SET ReadSet, WriteSet;
 
-	FD_ZERO(&ReadSet);
-	FD_ZERO(&WriteSet);
+	list<FD_SET *> Readlist;
+	list<FD_SET *> Writelist;
+	int iSockCount = 0;
 
-	FD_SET(listen_sock, &ReadSet);
+	FD_SET *ReadSet = new FD_SET;
+	FD_SET *WriteSet = new FD_SET;
 
+	Readlist.push_back(ReadSet);
+	Writelist.push_back(WriteSet);
+
+	FD_ZERO(ReadSet);
+	FD_ZERO(WriteSet);
+
+	FD_SET(listen_sock, ReadSet);
+	iSockCount++;
+
+	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
+	{
+		if ((*aIter)->sock != INVALID_SOCKET){
+			if ((*aIter)->SendQ.GetUseSize() > 0)
+				FD_SET((*aIter)->sock, WriteSet);
+
+			FD_SET((*aIter)->sock, ReadSet);
+
+			iSockCount++;
+		}
+
+		if (iSockCount > 64)
+		{
+			ReadSet = new FD_SET;
+			WriteSet = new FD_SET;
+
+			Readlist.push_back(ReadSet);
+			Writelist.push_back(WriteSet);
+
+			FD_ZERO(&ReadSet);
+			FD_ZERO(&WriteSet);
+
+			iSockCount = 0;
+		}
+	}
+	
+	/*
 	//-----------------------------------------------------------------------------------
 	// Account Socket阑 ReadSet, WriteSet俊 殿废
 	//-----------------------------------------------------------------------------------
@@ -151,7 +188,7 @@ void Network()
 			FD_SET((*aIter)->sock, &ReadSet);
 		}
 	}
-
+	*/
 	TIMEVAL Time;
 	Time.tv_sec = 0;
 	Time.tv_usec = 0;
@@ -159,29 +196,34 @@ void Network()
 	//-----------------------------------------------------------------------------------
 	// Select
 	//-----------------------------------------------------------------------------------
-	retval = select(0, &ReadSet, &WriteSet, NULL, &Time);
+	list<FD_SET *>::iterator ReadIter = Readlist.begin();
+	list<FD_SET *>::iterator WriteIter = Writelist.begin();
 
-	if (retval == 0)		return;
+	for (int iCnt = 0; iCnt < Readlist.size(); iCnt++){
+		retval = select(0, (*ReadIter), (*WriteIter), NULL, &Time);
 
-	else if (retval < 0)
-	{
-		DWORD dwError = GetLastError();
-		wprintf(L"Select() Error : %d\n", dwError);
-		exit(1);
-	}
+		if (retval == 0)		return;
 
-	else
-	{
-		//-------------------------------------------------------------------------------
-		// Accept 贸府
-		//-------------------------------------------------------------------------------
-		if (FD_ISSET(listen_sock, &ReadSet))
-			AcceptClient();
-		//-------------------------------------------------------------------------------
-		// Socket 贸府
-		//-------------------------------------------------------------------------------
+		else if (retval < 0)
+		{
+			DWORD dwError = GetLastError();
+			wprintf(L"Select() Error : %d\n", dwError);
+			exit(1);
+		}
+
 		else
-			SocketProc(ReadSet, WriteSet);
+		{
+			//-------------------------------------------------------------------------------
+			// Accept 贸府
+			//-------------------------------------------------------------------------------
+			if (FD_ISSET(listen_sock, (*ReadIter)))
+				AcceptClient();
+			//-------------------------------------------------------------------------------
+			// Socket 贸府
+			//-------------------------------------------------------------------------------
+			else
+				SocketProc((*ReadIter), (*WriteIter));
+		}
 	}
 }
 
@@ -216,16 +258,16 @@ void AcceptClient()
 // Socket Set俊 措茄 贸府
 // - Write, Read俊 措茄 橇肺矫历 贸府
 /*-------------------------------------------------------------------------------------*/
-void SocketProc(FD_SET ReadSet, FD_SET WriteSet)
+void SocketProc(FD_SET *ReadSet, FD_SET *WriteSet)
 {
 	AccountIter aIter;
 
 	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
 	{
-		if (FD_ISSET((*aIter)->sock, &WriteSet))
+		if (FD_ISSET((*aIter)->sock, WriteSet))
 			WriteProc((*aIter));
 
-		if (FD_ISSET((*aIter)->sock, &ReadSet))
+		if (FD_ISSET((*aIter)->sock, ReadSet))
 			ReadProc((*aIter));
 	}
 }
