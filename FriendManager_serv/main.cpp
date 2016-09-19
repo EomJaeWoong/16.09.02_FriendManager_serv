@@ -19,6 +19,8 @@
 // Listen Socket
 //---------------------------------------------------------------------------------------
 SOCKET				listen_sock;
+list<FD_SET *>		Readlist;
+list<FD_SET *>		Writelist;
 
 //-----------------------------------------------------------------------------------
 // 회원번호 증가를 위한 NO
@@ -133,8 +135,6 @@ void Network()
 	int retval;
 	AccountIter aIter;
 
-	list<FD_SET *> Readlist;
-	list<FD_SET *> Writelist;
 	int iSockCount = 0;
 
 	FD_SET *ReadSet = new FD_SET;
@@ -151,15 +151,6 @@ void Network()
 
 	for (aIter = g_lAccount.begin(); aIter != g_lAccount.end(); ++aIter)
 	{
-		if ((*aIter)->sock != INVALID_SOCKET){
-			if ((*aIter)->SendQ.GetUseSize() > 0)
-				FD_SET((*aIter)->sock, WriteSet);
-
-			FD_SET((*aIter)->sock, ReadSet);
-
-			iSockCount++;
-		}
-
 		if (iSockCount > 64)
 		{
 			ReadSet = new FD_SET;
@@ -168,10 +159,19 @@ void Network()
 			Readlist.push_back(ReadSet);
 			Writelist.push_back(WriteSet);
 
-			FD_ZERO(&ReadSet);
-			FD_ZERO(&WriteSet);
+			FD_ZERO(ReadSet);
+			FD_ZERO(WriteSet);
 
 			iSockCount = 0;
+		}
+
+		if ((*aIter)->sock != INVALID_SOCKET){
+			if ((*aIter)->SendQ.GetUseSize() > 0)
+				FD_SET((*aIter)->sock, WriteSet);
+
+			FD_SET((*aIter)->sock, ReadSet);
+
+			iSockCount++;
 		}
 	}
 	
@@ -199,10 +199,10 @@ void Network()
 	list<FD_SET *>::iterator ReadIter = Readlist.begin();
 	list<FD_SET *>::iterator WriteIter = Writelist.begin();
 
-	for (int iCnt = 0; iCnt < Readlist.size(); iCnt++){
+	for (int iCnt = 0; iCnt < Readlist.size() || iCnt < Writelist.size(); iCnt++){
 		retval = select(0, (*ReadIter), (*WriteIter), NULL, &Time);
 
-		if (retval == 0)		return;
+		if (retval == 0)		break;
 
 		else if (retval < 0)
 		{
@@ -225,6 +225,15 @@ void Network()
 				SocketProc((*ReadIter), (*WriteIter));
 		}
 	}
+
+	for (ReadIter = Readlist.begin(); ReadIter != Readlist.end(); ++ReadIter)
+		delete (*ReadIter);
+
+	for (WriteIter = Writelist.begin(); WriteIter != Writelist.end(); ++WriteIter)
+		delete (*WriteIter);
+
+	Readlist.clear();
+	Writelist.clear();
 }
 
 /*-------------------------------------------------------------------------------------*/
@@ -331,15 +340,15 @@ void ReadProc(stAccount *pAccount)
 		}
 
 		else
-			PacketProc(uiAccountNo);
+			PacketProc(pAccount);
 	}
 }
 
-BOOL PacketProc(UINT64 uiAccountNo)
+BOOL PacketProc(stAccount *pAccount)
 {
 	st_PACKET_HEADER header;
 	CNPacket cPacket;
-	stAccount *pAccount = findAccount(uiAccountNo);
+	//stAccount *pAccount = findAccount(uiAccountNo);
 
 	//--------------------------------------------------------------------------------------*/
 	//RecvQ 용량이 header보다 작은지 검사

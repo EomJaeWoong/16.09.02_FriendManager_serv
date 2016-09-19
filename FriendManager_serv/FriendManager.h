@@ -72,7 +72,7 @@ void SocketProc(FD_SET *ReadSet, FD_SET *WriteSet);
 void WriteProc(stAccount *pAccount);
 void ReadProc(stAccount *pAccount);
 
-BOOL PacketProc(UINT64 uiAccountNo);
+BOOL PacketProc(stAccount *pAccount);
 
 /*-------------------------------------------------------------------------------------*/
 // Client -> Server로 온 Packet 처리
